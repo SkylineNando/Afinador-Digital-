@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Afinador Digital</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Roboto', sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background-color: #0f0f0f;
+      color: #ffffff;
+    }
+
+    .tuner-container {
+      text-align: center;
+      width: 340px;
+      padding: 20px;
+      background: #1c1c1c;
+      border-radius: 16px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    .arc {
+      position: relative;
+      width: 300px;
+      height: 150px;
+      background: conic-gradient(
+        #ff6b6b 0% 30%,
+        #ffa502 30% 50%,
+        #2ed573 50% 70%,
+        #ffa502 70% 90%,
+        #ff6b6b 90% 100%
+      );
+      border-radius: 150px 150px 0 0;
+      margin: 0 auto 20px;
+      overflow: hidden;
+    }
+
+    .pointer {
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      width: 4px;
+      height: 100px;
+      background: #ffffff;
+      border-radius: 2px;
+      transform: translateX(-50%) rotate(0deg);
+      transform-origin: bottom;
+      transition: transform 0.1s ease-in-out, background-color 0.2s ease-in-out;
+    }
+
+    .note-display {
+      font-size: 3.5rem;
+      font-weight: 500;
+      margin: 10px 0;
+      color: #2ed573;
+    }
+
+    .status-display {
+      font-size: 1.1rem;
+      font-weight: 300;
+      color: #d2dae2;
+    }
+
+    .mic-button {
+      margin-top: 20px;
+      background: #34c759;
+      border: none;
+      color: #ffffff;
+      padding: 14px 28px;
+      font-size: 1rem;
+      font-weight: bold;
+      border-radius: 25px;
+      cursor: pointer;
+      transition: background 0.3s ease, transform 0.1s ease;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    .mic-button:hover {
+      background: #28a745;
+      transform: scale(1.05);
+    }
+
+    .mic-button:active {
+      background: #218838;
+      transform: scale(1);
+    }
+  </style>
+</head>
+<body>
+  <div class="tuner-container">
+    <div class="arc">
+      <div class="pointer" id="pointer"></div>
+    </div>
+    <div class="note-display" id="note">-</div>
+    <div class="status-display" id="status">Ouvindo...</div>
+    <button class="mic-button" onclick="startTuner()">Iniciar Microfone</button>
+  </div>
+
+  <script>
+    const pointer = document.getElementById('pointer');
+    const noteDisplay = document.getElementById('note');
+    const statusDisplay = document.getElementById('status');
+
+    const A4_FREQUENCY = 440; // Frequência padrão de afinação (A = 440Hz)
+    const TOLERANCE = 5; // Tolerância para considerar "Afinado"
+    const notes = [
+      { name: "E", frequency: 82.41 },
+      { name: "A", frequency: 110.00 },
+      { name: "D", frequency: 146.83 },
+      { name: "G", frequency: 196.00 },
+      { name: "B", frequency: 246.94 },
+      { name: "E", frequency: 329.63 },
+    ];
+
+    function startTuner() {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const analyser = audioContext.createAnalyser();
+          const microphone = audioContext.createMediaStreamSource(stream);
+          const scriptProcessor = audioContext.createScriptProcessor(2048, 1, 1);
+
+          analyser.fftSize = 2048;
+          microphone.connect(analyser);
+          analyser.connect(scriptProcessor);
+          scriptProcessor.connect(audioContext.destination);
+
+          scriptProcessor.onaudioprocess = () => {
+            const buffer = new Float32Array(analyser.fftSize);
+            analyser.getFloatTimeDomainData(buffer);
+
+            const frequency = autoCorrelate(buffer, audioContext.sampleRate);
+            if (frequency !== -1) {
+              const note = getClosestNote(frequency);
+              noteDisplay.textContent = note.name;
+              updateStatus(frequency, note.frequency);
+            } else {
+              noteDisplay.textContent = '-';
+              statusDisplay.textContent = 'Ouvindo...';
+              pointer.style.transform = `translateX(-50%) rotate(0deg)`;
+              pointer.style.backgroundColor = 'white';
+            }
+          };
+        });
+      }
+    }
+
+    function autoCorrelate(buffer, sampleRate) {
+      let size = buffer.length;
+      let rms = 0;
+
+      for (let i = 0; i < size; i++) {
+        rms += buffer[i] * buffer[i];
+      }
+      rms = Math.sqrt(rms / size);
+      if (rms < 0.01) return -1;
+
+      let r1 = 0, r2 = size - 1, threshold = 0.2;
+      for (let i = 0; i < size / 2; i++) {
+        if (Math.abs(buffer[i]) < threshold) {
+          r1 = i;
+          break;
+        }
+      }
+      for (let i = 1; i < size / 2; i++) {
+        if (Math.abs(buffer[size - i]) < threshold) {
+          r2 = size - i;
+          break;
+        }
+      }
+
+      buffer = buffer.slice(r1, r2);
+      size = buffer.length;
+
+      const c = new Array(size).fill(0);
+      for (let i = 0; i < size; i++) {
+        for (let j = 0; j < size - i; j++) {
+          c[i] = c[i] + buffer[j] * buffer[j + i];
+        }
+      }
+
+      let d = 0;
+      while (c[d] > c[d + 1]) d++;
+      let maxval = -1, maxpos = -1;
+      for (let i = d; i < size; i++) {
+        if (c[i] > maxval) {
+          maxval = c[i];
+          maxpos = i;
+        }
+      }
+      let T0 = maxpos;
+
+      return sampleRate / T0;
+    }
+
+    function getClosestNote(frequency) {
+      let closestNote = notes[0];
+      let minDiff = Math.abs(frequency - notes[0].frequency);
+
+      for (const note of notes) {
+        const diff = Math.abs(frequency - note.frequency);
+        if (diff < minDiff) {
+          closestNote = note;
+          minDiff = diff;
+        }
+      }
+      return closestNote;
+    }
+
+    function updateStatus(frequency, targetFrequency) {
+      const diff = frequency - targetFrequency;
+      const angle = Math.min(Math.max(diff * 2, -50), 50);
+      pointer.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+
+      if (Math.abs(diff) <= TOLERANCE) {
+        pointer.style.backgroundColor = '#2ed573';
+        statusDisplay.textContent = 'Afinado!';
+      } else if (diff > 0) {
+        pointer.style.backgroundColor = '#ffa502';
+        statusDisplay.textContent = 'Aumentar o Grave';
+      } else {
+        pointer.style.backgroundColor = '#ff6b6b';
+        statusDisplay.textContent = 'Aumentar o Agudo';
+      }
+    }
+  </script>
+</body>
+</html>
